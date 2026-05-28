@@ -26,6 +26,7 @@ ANIM_MAP = {
     "wag":    "PART_ANIM_WAG",
     "bounce": "PART_ANIM_BOUNCE",
     "spin":   "PART_ANIM_SPIN",
+    "blink":  "PART_ANIM_BLINK",
     None:     "PART_ANIM_NONE",
 }
 
