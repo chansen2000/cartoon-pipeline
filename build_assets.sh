@@ -112,8 +112,22 @@ echo "[10/11] xxd embed INI → C arrays"
 cd "$LVGL_CONFIG_DIR"
 xxd -i cat_animation_config.ini > cat_animation_config_data.h
 xxd -i bg_forest_animation_config.ini > bg_forest_animation_config_data.h
-echo "  → cat_animation_config_data.h"
-echo "  → bg_forest_animation_config_data.h"
+# xxd -i 不输出尾零, inih ini_parse_string 读到数组末尾后 UB
+python3 -c "
+import re
+for f in ['cat_animation_config_data.h', 'bg_forest_animation_config_data.h']:
+    with open(f, 'r') as fh:
+        txt = fh.read()
+    last = [(m.start(), m.group()) for m in re.finditer(r'0x[0-9a-fA-F]{2}', txt)][-1]
+    pos = last[0] + len(last[1])
+    lm = re.search(r'unsigned int (\w+) = (\d+);', txt)
+    txt = txt[:pos] + ', 0x00' + txt[pos:]
+    txt = txt.replace(f'{lm.group(1)} = {lm.group(2)}', f'{lm.group(1)} = {int(lm.group(2)) + 1}')
+    with open(f, 'w') as fh:
+        fh.write(txt)
+"
+echo "  → cat_animation_config_data.h (+null terminator)"
+echo "  → bg_forest_animation_config_data.h (+null terminator)"
 cd "$SCRIPT_DIR"
 echo ""
 
