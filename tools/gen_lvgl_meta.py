@@ -30,6 +30,14 @@ ANIM_MAP = {
     None:     "PART_ANIM_NONE",
 }
 
+# 部件→anim 白名单 (优先于 JSON click_anim, 对齐 config.CLICK_ANIM_MAP)
+PART_CLICK_ANIM = {
+    "Eye1":  "blink",
+    "Eye2":  "blink",
+    "Tails": "wag",
+    "Hat":   "bounce",   # H+: click_part hat 需要 bounce
+}
+
 # 每个 skin 必须包含的部件 (所有 15 角色都有的核心 8 件)
 REQUIRED_PARTS = ["Shadow", "Body", "Eye1", "Tails", "Hand_B", "Hand_F", "Leg_B", "Leg_F"]
 
@@ -158,7 +166,8 @@ def gen_source(chars):
         lines.append(f"/* ── {cid}: {len(parts)} parts (z-ordered) ────────── */")
         lines.append(f"const part_meta_t cat_parts_{cid}[] = {{")
         for p in parts:
-            anim = ANIM_MAP.get(p.get("click_anim"), "PART_ANIM_NONE")
+            click_anim = PART_CLICK_ANIM.get(p["name"], p.get("click_anim"))
+            anim = ANIM_MAP.get(click_anim, "PART_ANIM_NONE")
             rot_01 = round(p["rotation"] * 10)
             img = img_ref(cid, p["file"])
             lines.append(f'    {{ "{p["name"]}", {p["x"]}, {p["y"]}, {p["w"]}, {p["h"]}, '

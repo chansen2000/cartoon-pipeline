@@ -75,7 +75,7 @@ CLICK_ANIM_MAP = {
     "Eye2":   "spin",
     "Tails":  "wag",
     "Body":   None,    # 耳朵在 Body 里，bounce 暴露左右不对称
-    "Hat":    None,    # bounce 暴露被盖住的左耳
+    "Hat":    "bounce",
     "Shadow": None,
     "Leg_B":  None,
     "Leg_F":  None,
