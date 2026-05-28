@@ -23,8 +23,24 @@ LVGL_BG_DIR="$LVGL_ASSETS_DIR/bg"
 LVGL_CONFIG_DIR="$LVGL_PROJECT_DIR/src/cartoon/config"
 # ───────────────────────────────────────────────────────
 
-echo "=== TVCartoon build_assets ==="
+# ── 旗标解析 ──────────────────────────────────────────
+FAST_MODE=0
+for arg in "$@"; do
+    case "$arg" in
+        --fast) FAST_MODE=1 ;;
+        *) echo "未知参数: $arg"; exit 1 ;;
+    esac
+done
+
+if [ $FAST_MODE -eq 1 ]; then
+    echo "=== TVCartoon build_assets [FAST] ==="
+    echo "(跳过资产生成 [1]~[8], 只跑 INI cp + xxd + make)"
+else
+    echo "=== TVCartoon build_assets ==="
+fi
 echo ""
+
+if [ $FAST_MODE -eq 0 ]; then
 
 # ── 角色: 小猫 ────────────────────────────────────────
 
@@ -70,16 +86,22 @@ python3 "$LVGL_PROJECT_DIR/tools/gen_frame_lookup.py" \
     "$LVGL_ASSETS_DIR/frame_lookup.c"
 echo ""
 
+fi  # FAST_MODE skip [1]~[8]
+
 # ── 拷贝产物到 LVGL 工程 ──────────────────────────────
 
-echo "[9/11] cp assets → LVGL"
-cp -v output/小猫/lvgl_export/meta/cat_parts_meta.{h,c} "$LVGL_ASSETS_DIR/"
-cp -v output/小猫/lvgl_export/dsc/cat_C*.c "$LVGL_ASSETS_DIR/"
+if [ $FAST_MODE -eq 0 ]; then
+    echo "[9/11] cp assets → LVGL"
+    cp -v output/小猫/lvgl_export/meta/cat_parts_meta.{h,c} "$LVGL_ASSETS_DIR/"
+    cp -v output/小猫/lvgl_export/dsc/cat_C*.c "$LVGL_ASSETS_DIR/"
 
-mkdir -p "$LVGL_BG_DIR/森林"
-cp -v output/森林/lvgl_export/bg/bg_forest_*.c "$LVGL_BG_DIR/森林/"
-cp -v output/森林/lvgl_export/meta/bg_forest.{h,c} "$LVGL_BG_DIR/森林/"
+    mkdir -p "$LVGL_BG_DIR/森林"
+    cp -v output/森林/lvgl_export/bg/bg_forest_*.c "$LVGL_BG_DIR/森林/"
+    cp -v output/森林/lvgl_export/meta/bg_forest.{h,c} "$LVGL_BG_DIR/森林/"
+    echo ""
+fi
 
+echo "[9/11] cp INI → LVGL"
 cp -v config/小猫/animation_config.ini "$LVGL_CONFIG_DIR/cat_animation_config.ini"
 cp -v config/森林/animation_config.ini "$LVGL_CONFIG_DIR/bg_forest_animation_config.ini"
 echo ""
@@ -99,26 +121,26 @@ echo ""
 
 echo "[11/11] rebuild LVGL binary"
 LVGL_BUILD_DIR="$LVGL_PROJECT_DIR/build_mac"
-if [ ! -d "$LVGL_BUILD_DIR" ]; then
-    echo "  build_mac/ 目录不存在, 先 cmake 配置"
-    mkdir -p "$LVGL_BUILD_DIR"
-    cd "$LVGL_BUILD_DIR"
-    cmake -DCMAKE_BUILD_TYPE=Release ..
-    cd "$SCRIPT_DIR"
-fi
+mkdir -p "$LVGL_BUILD_DIR"
 cd "$LVGL_BUILD_DIR"
+if [ ! -f "CMakeCache.txt" ]; then
+    echo "  build_mac/ 未配置, 先 cmake"
+    cmake -DCMAKE_BUILD_TYPE=Release ..
+fi
 make -j8
 cd "$SCRIPT_DIR"
 echo "  → $LVGL_PROJECT_DIR/bin/main"
 echo ""
 
 echo "Done. LVGL project now has:"
-echo "  cat_parts_meta.{h,c}"
-echo "  cat_C*.c ($(ls "$LVGL_ASSETS_DIR"/cat_C*.c 2>/dev/null | wc -l | xargs) files)"
-echo "  pngseq/pngseq_C01_*.c ($(ls "$LVGL_ASSETS_DIR/pngseq"/*.c 2>/dev/null | wc -l | xargs) files)"
-echo "  bg/森林/bg_forest_*.c ($(ls "$LVGL_BG_DIR/森林"/*.c 2>/dev/null | wc -l | xargs) files)"
-echo "  bg/森林/bg_forest.{h,c}"
-echo "  frame_lookup.c"
+if [ $FAST_MODE -eq 0 ]; then
+    echo "  cat_parts_meta.{h,c}"
+    echo "  cat_C*.c ($(ls "$LVGL_ASSETS_DIR"/cat_C*.c 2>/dev/null | wc -l | xargs) files)"
+    echo "  pngseq/pngseq_C01_*.c ($(ls "$LVGL_ASSETS_DIR/pngseq"/*.c 2>/dev/null | wc -l | xargs) files)"
+    echo "  bg/森林/bg_forest_*.c ($(ls "$LVGL_BG_DIR/森林"/*.c 2>/dev/null | wc -l | xargs) files)"
+    echo "  bg/森林/bg_forest.{h,c}"
+    echo "  frame_lookup.c"
+fi
 echo "  config/cat_animation_config.ini"
 echo "  config/bg_forest_animation_config.ini"
 echo "  bin/main  ($(stat -f '%Sm' "$LVGL_PROJECT_DIR/bin/main"))"
