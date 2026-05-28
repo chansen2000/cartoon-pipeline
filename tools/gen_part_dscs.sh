@@ -1,15 +1,21 @@
 #!/bin/bash
 # 单部件 dsc 自动化: Spine raw PNG → resize 到 410 视角 → lv_img_conv ARGB8888
 # 部件清单从 cat_parts_meta.h 解析 (单一事实源, 跟 meta 永远同步)
+#
+# 用法: bash tools/gen_part_dscs.sh [material]
+#   material 默认 "小猫"
 set -e
+
+MATERIALS_DIR="/Users/chansen2000/Downloads/素材/选择"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PIPELINE_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PIPELINE_DIR"
 
-SPINE_ROOT="/Users/chansen2000/Downloads/素材/选择/小猫/Spine"
-META_H="output/小猫/lvgl_export/meta/cat_parts_meta.h"
-OUT_DIR="output/小猫/lvgl_export/dsc"
+MATERIAL="${1:-小猫}"
+SPINE_ROOT="$MATERIALS_DIR/$MATERIAL/Spine"
+META_H="output/$MATERIAL/lvgl_export/meta/cat_parts_meta.h"
+OUT_DIR="output/$MATERIAL/lvgl_export/dsc"
 
 SCALE_W=410
 SCALE_H=502
@@ -22,7 +28,7 @@ rm -f "$OUT_DIR"/cat_C*.c
 
 parts=$(grep 'LV_IMAGE_DECLARE' "$META_H" | sed -E 's/.*LV_IMAGE_DECLARE\((.+)\);.*/\1/')
 total=$(echo "$parts" | wc -l | tr -d ' ')
-echo "=== gen_part_dscs: $total parts ==="
+echo "=== gen_part_dscs: $MATERIAL $total parts ==="
 
 count=0
 for var_name in $parts; do

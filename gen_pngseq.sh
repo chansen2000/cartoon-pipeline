@@ -1,21 +1,28 @@
 #!/bin/bash
 # TVCartoon PNG 序列 → LVGL C 数组 批量转换
 #
-# 用法: bash gen_pngseq.sh
+# 用法: bash gen_pngseq.sh [material] [character_id]
+#   material     默认 "小猫"
+#   character_id 默认 "01"
 #
-# 输入: 素材/选择/小猫/Png/Character01/<Action>/*.png (788×504 RGBA)
-# 输出: output/小猫/lvgl_export/pngseq/pngseq_C01_<action>_<NN>.c (410×502 RGB565A8)
+# 输入: 素材/选择/{material}/Png/Character{id}/<Action>/*.png (788×504 RGBA)
+# 输出: output/{material}/lvgl_export/pngseq/pngseq_C{id}_<action>_<NN>.c (410×502 RGB565A8)
 #
 # 工具: ImageMagick (resize) + lv_img_conv (RGB565A8 C 数组)
 # 按 SPEC §6.2 要求使用 LVGL 官方 lv-img-conv,不自写编码
 
 set -e
 
+MATERIALS_DIR="/Users/chansen2000/Downloads/素材/选择"
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-SRC="/Users/chansen2000/Downloads/素材/选择/小猫/Png/Character01"
-OUT_DIR="output/小猫/lvgl_export/pngseq"
+MATERIAL="${1:-小猫}"
+CHAR_ID="${2:-01}"
+
+SRC="$MATERIALS_DIR/$MATERIAL/Png/Character$CHAR_ID"
+OUT_DIR="output/$MATERIAL/lvgl_export/pngseq"
 
 mkdir -p "$OUT_DIR"
 
@@ -35,7 +42,7 @@ ACTIONS=(
 
 TOTAL_FRAMES=0
 
-echo "=== TVCartoon gen_pngseq ==="
+echo "=== TVCartoon gen_pngseq: $MATERIAL C$CHAR_ID ==="
 echo ""
 
 for action_pair in "${ACTIONS[@]}"; do
@@ -62,7 +69,7 @@ for action_pair in "${ACTIONS[@]}"; do
     for ((i=0; i<count; i++)); do
         src_png="${pngs[$i]}"
         frame_num=$(printf "%02d" "$i")
-        out_name="pngseq_C01_${lower}_${frame_num}"
+        out_name="pngseq_C${CHAR_ID}_${lower}_${frame_num}"
 
         # Resize 788×504 → 410×502, then convert to RGB565A8 C array
         magick "$src_png" -resize 410x502 /tmp/_pngseq_resized.png

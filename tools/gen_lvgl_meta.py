@@ -2,10 +2,10 @@
 """gen_lvgl_meta.py — 读流水线 JSON → 产出 cat_parts_meta.{h,c}
 
 用法:
-  python3 tools/gen_lvgl_meta.py
+  python3 tools/gen_lvgl_meta.py --material 小猫
 
-输入: output/小猫/json/410_502/Cxx_default_positions.json × 15
-输出: output/小猫/lvgl_export/meta/cat_parts_meta.{h,c}
+输入: output/{material}/json/410_502/Cxx_default_positions.json × 15
+输出: output/{material}/lvgl_export/meta/cat_parts_meta.{h,c}
 
 契约 (LVGL 端依赖):
   - 数组顺序 = 渲染顺序 (z_order 升序, 底层→顶层)
@@ -14,15 +14,13 @@
   - 校验失败 → 非零退出, 不让有问题的数据流到 LVGL
 """
 
+import argparse
 import json
 import os
 import sys
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(SCRIPT_DIR) if os.path.basename(SCRIPT_DIR) == "tools" else SCRIPT_DIR
-
-JSON_DIR = os.path.join(PROJECT_DIR, "output", "小猫", "json", "410_502")
-OUT_DIR = os.path.join(PROJECT_DIR, "output", "小猫", "lvgl_export", "meta")
 
 ANIM_MAP = {
     "wag":    "PART_ANIM_WAG",
@@ -48,14 +46,14 @@ def img_ref(char_id, file_path):
     return f"&cat_{char_id}_{safe}"
 
 
-def load_characters():
+def load_characters(json_dir):
     """读 15 份 JSON, 每角色 parts 按 z_order 升序排好"""
     chars = {}
-    for fname in sorted(os.listdir(JSON_DIR)):
+    for fname in sorted(os.listdir(json_dir)):
         if not fname.endswith("_default_positions.json"):
             continue
         char_id = fname.split("_")[0]
-        with open(os.path.join(JSON_DIR, fname), "r") as f:
+        with open(os.path.join(json_dir, fname), "r") as f:
             data = json.load(f)
         parts = data["parts"]
         parts.sort(key=lambda p: p["z_order"])
@@ -200,25 +198,32 @@ def gen_source(chars):
 
 
 def main():
-    chars = load_characters()
+    p = argparse.ArgumentParser(description="gen_lvgl_meta — 角色部件元数据 C 代码生成")
+    p.add_argument("--material", default="小猫", help="素材名 (默认 小猫)")
+    args = p.parse_args()
+
+    material = args.material
+    json_dir = os.path.join(PROJECT_DIR, "output", material, "json", "410_502")
+    out_dir = os.path.join(PROJECT_DIR, "output", material, "lvgl_export", "meta")
+
+    chars = load_characters(json_dir)
     if not chars:
-        print(f"ERROR: no JSON files found in {JSON_DIR}", file=sys.stderr)
+        print(f"ERROR: no JSON files found in {json_dir}", file=sys.stderr)
         return 1
 
     print(f"Found {len(chars)} characters: {', '.join(sorted(chars.keys()))}")
     for cid in sorted(chars.keys()):
         print(f"  {cid}: {len(chars[cid])} parts")
 
-    # 校验
     if not validate(chars):
         return 1
 
     part_declares = collect_part_declares(chars)
 
-    os.makedirs(OUT_DIR, exist_ok=True)
+    os.makedirs(out_dir, exist_ok=True)
 
-    h_path = os.path.join(OUT_DIR, "cat_parts_meta.h")
-    c_path = os.path.join(OUT_DIR, "cat_parts_meta.c")
+    h_path = os.path.join(out_dir, "cat_parts_meta.h")
+    c_path = os.path.join(out_dir, "cat_parts_meta.c")
 
     with open(h_path, "w") as f:
         f.write(gen_header(chars, part_declares))

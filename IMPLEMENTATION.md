@@ -1,318 +1,455 @@
-# TVCartoon 素材拼装 — 实现方案
+# 素材流水线 — 文件清单与契约
 
-## 总览
+> 维护: 4.7 (2026-05-28)
+> 用途: sheng review / Sonnet 执行边界 / kaifu 消费契约
+> 状态: ✅ 流水线契约定义完整,标注 3 处架构越界待清理
+> 范围: **全局多素材包**(6 角色 + 9 背景),小猫只是首个落地实验
 
-`素材/选择/` 下有两类素材：**角色** (Spine 骨骼动画) 和 **背景** (图层叠加)。
+---
+
+## 0. 流水线契约(顶层)
+
+**一句话**: 流水线把**所有素材包**(角色 + 背景)在 410 视角下的资源准备好,LVGL 端只消费,不计算。
+
+**素材包覆盖范围**:
+
+| 类型 | 素材包 | 当前实现 | 目标 |
+|------|--------|----------|------|
+| 角色(Spine) | 小猫 / 小熊 / 企鹅 / 小兔 / 小鸡 / 熊猫 | 仅小猫 | 全 6 包 |
+| 背景(图层) | 北极 / 大自然 / 海底 / 海滩 / 森林 / 沙漠 / 石头 / 太空 / 西部 | 引擎已通用,未烘 LVGL 资产 | 全 9 包 |
+
+**资源层 vs 应用层 — 职责分界**:
+
+| 维度 | 资源层(流水线管) | 应用层(流水线 INI 管) |
+|------|------------------|------------------------|
+| 数据来源 | Spine 几何 / 背景图层尺寸 | 产品意图(谁会动/怎么动/什么时候动/视差比例) |
+| 是否随素材改变 | 是 | 部分(action 帧数跟 pngseq 强绑定;艺术约束跟素材绑定) |
+| 修改触发的回归 | 重跑 build_assets.sh | 改 INI 后重跑 build_assets.sh(校验 + 拷贝) |
+| 例子 | x/y/w/h/pivot/rotation/z_order/parallax_ratio | 是否可点击 / 点击播什么动画 / idle 候选 / 背景摆动幅度 |
+
+**红线**: 资源层不允许出现 `clickable` / `click_anim` / `anim_type` / `CLICK_ANIM_MAP` 这类应用决策字段。
+
+**两层契约的"家"**(都在流水线):
+
+| 层 | 契约文件(源头) | 维护人 | 同步去向 | 消费方 |
+|----|----------------|--------|----------|--------|
+| 资源层 — 角色 | `output/{素材}/json/410_502/*_positions.json` + `cat_parts_meta.{h,c}` + `cat_C*.c` × N + `pngseq_*.c` × M | Sonnet | build_assets.sh cp → `lv_port_pc_vscode/src/cartoon/assets/` | LVGL runtime |
+| 资源层 — 背景 | `output/{背景}/json/410_502/variant_*_layers.json` + `bg_*.c`(图层 RGB565)+ 元数据 C 文件 | Sonnet | build_assets.sh cp → `lv_port_pc_vscode/src/cartoon/assets/bg/` | LVGL runtime |
+| 应用层 | `config/{素材}/animation_config.ini`(每个素材包一份) | Sonnet | build_assets.sh cp → `lv_port_pc_vscode/src/cartoon/config/` | LVGL runtime |
+
+**关键原则**: LVGL 工程零维护契约。所有 INI / 资产 C 文件都是 build 产物,kaifu 不该手编辑。
+
+**应用层契约的内容**(animation_config.ini,每个素材包一份):
+- `[global]` — `default_skin` / 内存日志阈值
+- `[idle_script]` — `enable` / `parts=eye,tail,hat` / `gap_ms` / `shuffle`(idle 候选清单)
+- `[part.eye] / [part.tail] / [part.hat]` — 每类部件的 `enable` / `anim_type` / `duration_ms` / `amplitude`
+- `[action.idle / walk / jump / fly / hit / roll / dead / stuned / throwing]` — `frame_count` / `fps` / `loop` / `asset_prefix`(**frame_count 必须跟 pngseq 产出帧数一致**)
+- `[bg.{layer_name}]` — 背景每图层的 `parallax_ratio_override` / `sway_enable` / `sway_amplitude` / `sway_duration_ms`(背景动画契约)
+- `[bg.global]` — 整体摄像机移动速度 / 默认 sway 参数
+
+**为什么动画定义要从流水线开始**:
+1. **action.frame_count / asset_prefix 跟 pngseq 强绑定** — 流水线烘 20 帧,LVGL frame_count 必须 20,手动同步必出错
+2. **part.hat enable=false 这种艺术约束跟素材绑定** — C01 美术左耳被遮挡 → 不能 bounce,这是素材包事实
+3. **default_skin 是素材包指定主角** — 跟 CHAR_ACCESSORIES 一样属于素材层决策
+4. **bg.sway / bg.parallax 跟图层数量+图层语义绑定** — 北极的"l10-block"是前景遮挡(parallax=1.0,不摆动),海底的"水母层"要左右摆动(sway_enable=true),这些跟图层身份绑定,不是 LVGL 工程的事实
+
+---
+
+## 1. 输入(只读,不在本仓库)
+
+### 1.1 角色素材(6 包)
+
+| 路径 | 内容 |
+|------|------|
+| `/Users/chansen2000/Downloads/素材/选择/{小猫,小熊,企鹅,小兔,小鸡,熊猫}/Json Atlas/Characters.json` | Spine 骨骼 JSON |
+| `/Users/chansen2000/Downloads/素材/选择/{素材}/Spine/C{01..15}/*.png` | 单部件原图 |
+| `/Users/chansen2000/Downloads/素材/选择/{素材}/Png/Character{01..15}/{Action}/*.png` | 整身动画帧序列 |
+
+### 1.2 背景素材(9 包)
+
+| 路径 | 内容 |
+|------|------|
+| `/Users/chansen2000/Downloads/素材/选择/{北极,大自然,海底,海滩,森林,沙漠,石头,太空,西部}/_PNG/{variant}/layers/*.png` | 类型 A:layers/ 子目录(z 顺序按文件名数字) |
+| `/Users/chansen2000/Downloads/素材/选择/{沙漠,石头,西部}/PNG/{variant}/{background,1..N}.png` | 类型 B:平铺编号 |
+
+每个背景包通常有 4 个变体,每变体 3~10 图层,1920×1080。
+
+---
+
+## 2. 文件清单
+
+### 2.1 引擎层(可复用,无副作用)
+
+#### `assembler/config.py` — ⚠️ 含越界字段
+
+- **位置**: `素材流水线/assembler/config.py`
+- **业务功能**: 流水线全局常量与素材矩阵 — 所有素材包路径解析 + 角色配饰矩阵 + slot 渲染顺序的"中央配置"
+- **正确职责**:
+  - `MATERIALS_DIR` 素材根 / `CANVAS_W,H=788,504` / `P4_W,H=410,502`
+  - `CHAR_ACCESSORIES` 15 角色配饰矩阵(资源事实,目前只覆盖小猫,**待扩到 6 包**)
+  - `SLOT_DRAW_ORDER[material]` 渲染顺序(资源决策,**待扩到 6 包**)
+  - `CORE_PARTS / ACCESSORY_PARTS / PROP_PARTS / FX_PARTS` 部件分类
+  - `resolve_paths(material)` 路径解析
+- **❌ 越界(待删)**: `CLICK_ANIM_MAP` — 应用决策,挪到 INI
+- **输入**: 无(纯常量)
+- **输出**: 无(被 import 使用)
+
+#### `assembler/spine_assembler.py` — ⚠️ export_positions 含越界字段
+
+- **位置**: `素材流水线/assembler/spine_assembler.py`
+- **业务功能**: 把 Spine 骨骼动画文件解析成 410 视角下每个部件的精确位置/旋转/尺寸 — 一个 Spine 角色进,一张 PNG + 一份 JSON 出
+- **职责**:
+  - 读 `Characters.json`,递归计算骨骼世界变换链
+  - `assemble(character, ...)` → 返回 (PIL.Image 788×504, positions 列表)
+  - `scale_to_p4(image)` 视角缩放
+  - `export_positions(positions, target_w, target_h)` 输出未旋转 sprite 的 TL+尺寸+中心 pivot
+- **scale 算法(契约)**: `scale = min(tw/788, th/504)`,所有部件 `round(orig * scale)`
+- **post-efe045e 修正**: positions 输出未旋转语义(`raw_w × scale`),不再输出已旋转 bbox
+- **❌ 越界(待删)**: `export_positions` 末尾每个 part 写入 `clickable` / `click_anim` 字段
+- **输入**:
+  - `{material}/Json Atlas/Characters.json`
+  - `{material}/Spine/C{01..15}/*.png`
+- **输出**: 内存中的 PIL.Image 与 positions 列表(被 CLI 落盘)
+
+#### `assembler/background_assembler.py` — ✅ 引擎通用,需扩资产烘焙
+
+- **位置**: `素材流水线/assembler/background_assembler.py`
+- **业务功能**: 把背景包(多张分层 PNG)按 z-order 叠成完整一张大图,并标注每图层的视差比 — 一个背景变体进,一张合成 PNG + 一份图层 JSON 出
+- **职责**:
+  - 自动探测 `_PNG` vs `PNG` / 类型 A(layers/)vs 类型 B(平铺编号)
+  - 自然数字排序图层,叠加 → composite RGBA 1920×1080
+  - 计算 `parallax_ratio = z / (total - 1)`(z=0 远景不动,z=max 前景全速跟镜头)
+  - `export_layers(meta, target_w, target_h)` 导出 410 缩放后的图层坐标
+- **输入**: `{背景}/{_PNG|PNG}/{variant}/layers/*.png` 或 `{背景}/{_PNG|PNG}/{variant}/{background,1..N}.png`
+- **输出**: 内存 PIL.Image + 图层 meta(被 CLI 落盘)
+
+---
+
+### 2.2 入口 CLI(落盘第一段产物)
+
+#### `assemble_cli.py` — ✅ 无越界
+
+- **位置**: `素材流水线/assemble_cli.py`
+- **业务功能**: 从美术资产到角色组合的 CLI — 命令行批量把 Spine 角色组合成完整一张 PNG,顺带导出 LVGL 消费的部件坐标 JSON
+- **常用调用**: `python3 assemble_cli.py --material 小猫 --all --target 410x502 --export-lvgl`
+- **职责**: 调用 SpineAssembler → 输出 PNG(整身) + JSON(部件坐标表)
+- **输入**: 通过 SpineAssembler 间接读 Spine 资源
+- **输出**:
+  - `output/{material}/picture/410_502/C{01..15}_default.png`(整身预览图,留档用)
+  - `output/{material}/json/410_502/C{01..15}_default_positions.json`(LVGL 消费的坐标表)
+
+#### `assemble_bg.py` — ✅ 无越界
+
+- **位置**: `素材流水线/assemble_bg.py`
+- **业务功能**: 从美术资产到背景组合的 CLI — 命令行批量把背景图层叠成完整一张大图,顺带导出每图层视差比的 JSON
+- **常用调用**: `python3 assemble_bg.py --all-materials --target 410x502 --export-lvgl`
+- **职责**: 调用 BackgroundAssembler → 输出 PNG(合成图) + JSON(图层坐标 + 视差比)
+- **输入**: 通过 BackgroundAssembler 间接读背景资源
+- **输出**:
+  - `output/{背景}/picture/410_502/variant_{name}.png`
+  - `output/{背景}/json/410_502/variant_{name}_layers.json`
+
+---
+
+### 2.3 工具层(LVGL 资产烘焙)
+
+#### `tools/gen_lvgl_meta.py` — ⚠️ 含越界字段,需扩多素材
+
+- **位置**: `素材流水线/tools/gen_lvgl_meta.py`
+- **业务功能**: 把 JSON 坐标表翻译成 LVGL C 端可以直接 `cat_parts_get(char_id)` 调用的代码 — JSON 进,头/源 C 文件出
+- **职责**:
+  - 读 N 份 JSON(每素材 ≤15 角色),按 z_order 升序排列
+  - 校验必备 8 部件齐全 + 同名唯一,失败非零退出
+  - 生成 `cat_parts_meta.h`(声明 + LV_IMAGE_DECLARE 列表)
+  - 生成 `cat_parts_meta.c`(N 个 part_meta_t 数组 + cat_parts_find/get API)
+- **❌ 越界(待删)**: `ANIM_MAP` + part_meta_t 的 `anim_type` 字段
+- **当前局限**: 只读小猫,**待参数化为 `--material {小猫,小熊,...}` 或一次出多素材表**
+- **输入**: `output/{material}/json/410_502/C*_default_positions.json`
+- **输出**:
+  - `output/{material}/lvgl_export/meta/cat_parts_meta.h`
+  - `output/{material}/lvgl_export/meta/cat_parts_meta.c`
+
+#### `tools/gen_part_dscs.sh` — ✅ 已写入流水线,需扩多素材
+
+- **位置**: `素材流水线/tools/gen_part_dscs.sh`
+- **业务功能**: 把 Spine 单部件原图烘成 LVGL ARGB8888 C 数组 — 部件 PNG 进,部件 dsc C 文件出,LVGL 端直接以 `&cat_C01_Body` 引用
+- **职责**:
+  - 从 `cat_parts_meta.h` 解析 LV_IMAGE_DECLARE 列表(单一事实源)
+  - 找 Spine 原图 → magick resize → npx lv_img_conv ARGB8888
+  - sed post-process: lv_img_conv v0.4.0 输出 v8 → 转 v9
+  - 找不到源图立刻 exit 1
+- **scale 算法**: 与 SpineAssembler.export_positions 完全一致
+- **当前局限**: 路径硬编码小猫,**待参数化 `SPINE_ROOT` / `META_H` / `OUT_DIR`**
+- **输入**:
+  - `output/{material}/lvgl_export/meta/cat_parts_meta.h`
+  - `{material}/Spine/C{01..15}/<part>.png`
+- **输出**: `output/{material}/lvgl_export/dsc/cat_C{01..15}_<part>.c`
+- **格式**: `LV_COLOR_FORMAT_ARGB8888`
+
+#### `gen_pngseq.sh` — ✅ 无越界,需扩多素材
+
+- **位置**: `素材流水线/gen_pngseq.sh`(根目录,非 tools/)
+- **业务功能**: 把整身动画帧序列(每 action 一组 PNG)烘成 LVGL RGB565A8 C 数组 — Action PNG 进,pngseq C 文件出
+- **职责**: magick resize 410×502 → npx lv_img_conv RGB565A8 → sed v8→v9
+- **覆盖**: 9 组 action × ~28 帧 ≈ 250 帧
+- **当前局限**: 只读小猫 C01,**待参数化 + 支持每个素材包多角色**
+- **输入**: `{material}/Png/Character{NN}/{Action}/*.png`
+- **输出**: `output/{material}/lvgl_export/pngseq/pngseq_{Cxx}_{action}_{NN}.c`
+- **格式**: `LV_COLOR_FORMAT_RGB565A8`
+
+#### `tools/gen_bg_assets.sh` — ⚠️ 待新建(背景资产烘焙)
+
+- **目标位置**: `素材流水线/tools/gen_bg_assets.sh`(新建)
+- **业务功能**: 把背景每图层 PNG 烘成 LVGL RGB565 C 数组 — 图层 PNG 进,图层 dsc C 文件出
+- **职责**:
+  - 遍历 9 个背景包 × 4 变体 × 每变体图层
+  - magick resize 到 410×502(或保持 1920×410 以支持横向滚动 — 需 sheng 决策)
+  - npx lv_img_conv RGB565(或 RGB565A8 若有 alpha)
+  - sed v8→v9
+- **输入**: `output/{背景}/json/410_502/variant_*_layers.json`(图层清单)+ 原图
+- **输出**: `output/{背景}/lvgl_export/bg/bg_{背景}_{variant}_{layer}.c`
+- **格式**: `LV_COLOR_FORMAT_RGB565` 或 `RGB565A8`
+
+#### `tools/gen_bg_meta.py` — ⚠️ 待新建(背景元数据 C 翻译)
+
+- **目标位置**: `素材流水线/tools/gen_bg_meta.py`(新建)
+- **业务功能**: 把背景图层 JSON 翻译成 LVGL C 端可以直接 `bg_variant_get(name)` 调用的代码 — 图层 JSON 进,头/源 C 文件出
+- **职责**:
+  - 读 9 个背景包的 `variant_*_layers.json`
+  - 生成 `bg_meta.h` + `bg_meta.c`,定义 `bg_layer_meta_t { name, z_order, parallax_ratio, w, h, *img }`
+  - 提供 `bg_variant_get(material, variant) → bg_layer_meta_t* + count` 查表 API
+- **输入**: `output/{背景}/json/410_502/variant_*_layers.json`
+- **输出**: `output/{背景}/lvgl_export/meta/bg_meta.{h,c}`(或汇总到统一 bg_meta.{h,c})
+
+#### `config/{素材}/animation_config.ini` — ⚠️ 待新建(应用层契约源头)
+
+- **目标位置**:
+  - `素材流水线/config/小猫/animation_config.ini`
+  - `素材流水线/config/小熊/animation_config.ini`(将来)
+  - `素材流水线/config/北极/animation_config.ini`(背景动画,将来)
+  - …
+- **当前位置**: `lv_port_pc_vscode/src/cartoon/config/animation_config.ini`(待迁移)
+- **业务功能**: 应用层契约源头 — 谁会动 / 怎么动 / idle 候选 / 背景视差与摆动,跟具体素材包绑定
+- **职责**:
+  - 角色包: `[global] / [idle_script] / [part.X] / [action.X]`
+  - 背景包: `[bg.global] / [bg.{layer_name}]`(每图层是否摆动 / 视差 override)
+- **维护人**: Sonnet
+- **同步**: build_assets.sh 拷到 `lv_port_pc_vscode/src/cartoon/config/`
+
+#### `tools/validate_animation_config.py` — ⚠️ 待新建
+
+- **目标位置**: `素材流水线/tools/validate_animation_config.py`(新建)
+- **业务功能**: 校验应用层 INI 跟资源层 C 数组的一致性 — 防止 frame_count / asset_prefix / 图层 sway 配错
+- **职责**:
+  - 读 `config/{素材}/animation_config.ini` 解析所有 `[action.X]` 与 `[bg.X]`
+  - 扫资源产物(pngseq 帧数 / bg 图层名)
+  - 角色: 每 `[action.X].frame_count` = pngseq 实际帧数;`[part.X]` 的 X 必须在 part_meta_t 部件清单
+  - 背景: 每 `[bg.{layer}]` 的 layer 必须在 bg_meta 图层清单
+  - 任一不一致 → 打印明细 + exit 1
+- **输入**: INI + 资源产物目录
+- **输出**: 0 / 非零退出
+
+---
+
+### 2.4 编排层(一键流水线)
+
+#### `build_assets.sh` — ⚠️ 需扩到 8 步 + 多素材循环
+
+- **位置**: `素材流水线/build_assets.sh`
+- **业务功能**: 一键编排 — 把所有素材包的资源 + 应用契约从源头烘焙好,拷贝到 LVGL 工程,LVGL 端零手编辑
+- **目标流程**(对每个角色素材包循环):
+  1. `python3 assemble_cli.py --material {M} --all --target 410x502 --export-lvgl` — 出 JSON
+  2. `python3 tools/gen_lvgl_meta.py --material {M}` — 出 meta.{h,c}
+  3. `bash tools/gen_part_dscs.sh {M}` — 出单部件 dsc(ARGB8888)
+  4. `bash gen_pngseq.sh {M}` — 出 pngseq(RGB565A8)
+
+  对每个背景素材包循环:
+
+  5. `python3 assemble_bg.py --material {B} --all --target 410x502 --export-lvgl` — 出 JSON
+  6. `bash tools/gen_bg_assets.sh {B}` — 出 bg layer dsc
+  7. `python3 tools/gen_bg_meta.py --material {B}` — 出 bg_meta.{h,c}
+
+  统一收尾:
+
+  8. `python3 tools/validate_animation_config.py` — 校验所有 INI 与资源一致(任一失败 exit 1)
+  9. `python3 LVGL/tools/gen_frame_lookup.py` — 扫 pngseq 生成 lookup 表
+  10. `cp` 全部产物 → LVGL 工程对应目录(资产 + INI)
+
+---
+
+### 2.5 周边工具(开发期,不在主流水线)
+
+#### `verify_assembler.py` — ✅ 测试驱动
+
+- **位置**: `素材流水线/verify_assembler.py`
+- **业务功能**: SpineAssembler 硬编码回归测试 — 跑 5 个 sample 验证组合算法没退化
+- **职责**: 跑 C01 default / no_glasses / naked / C05 / C03 no_cloth
+- **输出**: `output/小猫/picture/788_504/*.png`
+
+#### `preview_anim.py` — ✅ 开发预览
+
+- **位置**: `素材流水线/preview_anim.py`
+- **业务功能**: matplotlib 可视化预览动画帧序列 — 检查美术原图有没有缺帧/帧序错乱,开发期检查工具
+- **职责**: 读 `素材/选择/小猫/Png/Character{NN}/{Action}/*.png`,键盘 1-9 切 action,G 导出 GIF
+- **输出**: `output/previews/*.gif`(开发期产物)
+- **状态**: 不在 build_assets.sh
+
+---
+
+## 3. 数据流(完整链路)
 
 ```
-选择/
-├── 小猫/ 小熊/ 企鹅/ 小兔/ 小鸡/ 熊猫/     ← 角色 (Spine)
-└── 北极/ 森林/ 海底/ 海滩/ 太空/
-    沙漠/ 石头/ 西部/ 大自然/               ← 背景 (图层)
-```
+═══════════ 角色资产流(每个素材包: 小猫/小熊/...) ═══════════
 
-**三条流水线**，按素材名分目录，统一输出到 `output/{素材名}/`。
+Spine 资源 (素材/选择/{material}/)
+   ├── Json Atlas/Characters.json ──┐
+   ├── Spine/C{01..15}/*.png        │
+   └── Png/Character{NN}/{Action}/*.png
+                                    │
+                                    ▼
+                 ┌────── assemble_cli.py --material {M}
+                 │        (SpineAssembler)
+                 │
+                 ▼
+       output/{M}/json/410_502/C{01..15}_default_positions.json
+                                    │
+                                    ▼
+                 ┌────── tools/gen_lvgl_meta.py --material {M}
+                 │
+                 ▼
+       output/{M}/lvgl_export/meta/cat_parts_meta.{h,c}
+                                    │
+                                    ▼ (LV_IMAGE_DECLARE 清单)
+                 ┌────── tools/gen_part_dscs.sh {M}
+                 │
+                 ▼
+       output/{M}/lvgl_export/dsc/cat_C{01..15}_<part>.c (ARGB8888)
 
-| # | 流水线 | 输入 | 输出 |
-|---|--------|------|------|
-| 1 | 角色拼装 | Spine 骨骼 + 部件 PNG | 合成 PNG + 坐标 JSON |
-| 2 | 背景叠加 | 图层 PNG | 合成 PNG + 图层 JSON |
-| 3 | **LVGL Meta 导出** | 坐标 JSON × 15 | `cat_parts_meta.{h,c}` → LVGL `#include` |
 
-## 目录结构
+       素材/选择/{M}/Png/Character{NN}/{Action}/*.png
+                                    │
+                                    ▼
+                 ┌────── gen_pngseq.sh {M}
+                 │
+                 ▼
+       output/{M}/lvgl_export/pngseq/pngseq_C{NN}_{action}_{NN}.c (RGB565A8)
 
-```
-素材流水线/
-├── assembler/
-│   ├── __init__.py
-│   ├── config.py                  # 路径、配饰表、分类常量
-│   ├── spine_assembler.py         # 角色拼装引擎
-│   └── background_assembler.py    # 背景叠加引擎
-├── assemble_cli.py                # 角色 CLI
-├── assemble_bg.py                 # 背景 CLI
-├── verify_assembler.py            # 角色验证 (6项测试)
-├── preview_anim.py                # Spine PNG 逐帧预览交互工具
-├── build_assets.sh                # ★ 一键资产生成 + 拷贝到 LVGL 工程
-├── tools/
-│   └── gen_lvgl_meta.py           # ★ 读 15 份 JSON → 产出 cat_parts_meta.{h,c}
-├── IMPLEMENTATION.md              # 本文件
-├── USAGE.md                       # 使用说明 (面向 kaifu)
-├── BACKGROUND_PLAN.md             # 背景方案讨论稿
-└── output/
-    └── {素材名}/
-        ├── picture/
-        │   ├── 788_504/           # 角色: C01~C15_default.png
-        │   ├── 410_502/           # P4 缩放
-        │   └── 1920_1080/         # 背景: variant_*.png
-        ├── json/
-        │   └── {W}_{H}/           # 对应分辨率的坐标 JSON
-        └── lvgl_export/           # ★ LVGL 工程消费的 C 产物统一出口
-            └── meta/
-                ├── cat_parts_meta.h   # part_meta_t 类型 + LV_IMAGE_DECLARE × 146
-                └── cat_parts_meta.c   # 15 角色数组 + cat_parts_find / cat_full_find
+
+═══════════ 背景资产流(每个背景包: 北极/海底/...) ═══════════
+
+背景资源 (素材/选择/{B}/{_PNG|PNG}/{variant}/layers/*.png)
+                                    │
+                                    ▼
+                 ┌────── assemble_bg.py --material {B}
+                 │        (BackgroundAssembler)
+                 │
+                 ▼
+       output/{B}/json/410_502/variant_{name}_layers.json
+                                    │
+                          ┌─────────┴─────────┐
+                          ▼                   ▼
+            ┌── tools/gen_bg_assets.sh {B}    tools/gen_bg_meta.py {B}
+            │
+            ▼
+       output/{B}/lvgl_export/bg/bg_{B}_{variant}_{layer}.c (RGB565)
+            │
+            └────────────► output/{B}/lvgl_export/meta/bg_meta.{h,c}
+
+
+═══════════ 应用契约流(每个素材包一份 INI) ═══════════
+
+       config/{M}/animation_config.ini       (角色: idle_script / part.X / action.X)
+       config/{B}/animation_config.ini       (背景: bg.global / bg.{layer})
+                          │
+                          │ frame_count/asset_prefix/layer 名一致性
+                          ▼
+                 ┌────── tools/validate_animation_config.py
+                 │        (失败 exit 1)
+                 ▼
+       (校验通过)
+
+
+═══════════ 收尾 ═══════════
+
+所有产物 → build_assets.sh step 10 → cp →
+   ├── lv_port_pc_vscode/src/cartoon/assets/      (角色 meta + dsc + pngseq + frame_lookup)
+   ├── lv_port_pc_vscode/src/cartoon/assets/bg/   (背景 layer dsc + bg_meta)
+   └── lv_port_pc_vscode/src/cartoon/config/      ({material}_animation_config.ini × N)
+                          │
+                          ▼
+            LVGL CMake GLOB 自动收录
+            cat_parts_get / bg_variant_get / cartoon_config_load 消费
 ```
 
 ---
 
-# 一、角色流水线 (SpineAssembler)
+## 4. 架构越界 — 待清理清单(3 处)
 
-## 核心算法
+| 序号 | 位置 | 越界字段 | 应在哪 | 删除影响 |
+|------|------|----------|--------|----------|
+| ❌ 1 | `assembler/config.py` | `CLICK_ANIM_MAP` | `config/{素材}/animation_config.ini` | 直接删,无引用断裂(只被 ❌2 用) |
+| ❌ 2 | `assembler/spine_assembler.py` `export_positions` | `clickable` / `click_anim` 字段 | LVGL 端运行时查 INI | JSON 字段消失,需同步删 ❌3 读取 |
+| ❌ 3 | `tools/gen_lvgl_meta.py` | `ANIM_MAP` + `anim_type` 字段写入 | 同上 | part_meta_t 结构体收缩,需同步改 LVGL 消费侧 |
 
-### 1. 骨骼矩阵链
-
-Spine 骨骼是树状层级，每骨骼存 local transform (x, y, rotation, scaleX, scaleY) + parent。递归计算 world transform：
-
-```
-local = [cos(rot)*sx, -sin(rot)*sy, x]
-        [sin(rot)*sx,  cos(rot)*sy, y]
-
-child_world = parent_world × child_local
-```
-
-21 个骨骼全部递归收敛，缓存于 `bone_worlds`。
-
-### 2. 附件世界坐标
-
-```
-world_x = bone.a * att_x + bone.b * att_y + bone.worldX
-world_y = bone.c * att_x + bone.d * att_y + bone.worldY
-```
-
-### 3. 世界 → 画布 (Y 轴翻转)
-
-```
-canvas_x = world_x - skeleton.x
-canvas_y = (skeleton.y + skeleton.height) - world_y
-```
-
-skeleton: `width=788, height=504, x=-416.54, y=-58.44`。
-
-## Skin 系统
-
-| 机制 | 说明 |
-|------|------|
-| Skin name | `Character01` ~ `Character15` → `C01` ~ `C15` |
-| Attachment key | **全部以 `C01/` 为前缀** (如 `C01/Body`)，不管哪个 Skin |
-| PNG 文件 | 按角色分目录 `Spine/C01/Body.png`、`Spine/C02/Body.png` |
-| 配饰表 | config.py `CHAR_ACCESSORIES`，默认值 + CLI 覆盖 |
-
-**关键陷阱**：Skin dict key 是 `"C01/Body"`，`_resolve_attachments()` 改写为 `"C02/Body"` (用于文件查找)。查位置数据时必须 fallback 到 C01 前缀。修复：精确匹配 → `C01/partname` → 裸名。
-
-## 角色配饰表
-
-```
-C01: hat+glasses           C06: hat           C11: (裸)
-C02: hat                   C07: cloth         C12: (裸)
-C03: hat+cloth             C08: glasses       C13: (裸)
-C04: cloth                 C09: (裸)          C14: glasses
-C05: (裸)                  C10: (裸)          C15: hat
-```
-
-## 输出 JSON (角色)
-
-```json
-{
-  "character": "C01",
-  "canvas": {"w": 410, "h": 502},
-  "parts_count": 10,
-  "parts": [{
-    "name": "Body",      "file": "C01/Body.png",
-    "x": 168, "y": 233,  "w": 96,  "h": 111,
-    "pivot_x": 48,        "pivot_y": 55,
-    "rotation": 0.0,      "z_order": 7,
-    "category": "core",   "clickable": true,
-    "click_anim": "bounce"
-  }]
-}
-```
-
-部件分类: core (9) / accessory (Hat/Glasses/Cloth) / prop (Hammer/Umbrella) / effect (Confuse Fx/Star/Splash/Box)
-
-动画类型: bounce → 上下弹跳, spin → 旋转, wag → 摇摆, null → 不可点击
-
-
-# 二、背景流水线 (BackgroundAssembler)
-
-## 素材结构
-
-9 个背景主题，每个 4 变体，全部 1920×1080。两种目录模式：
-
-**类型 A — layers/ 子目录** (北极/大自然/海底/海滩/森林/太空)
-```
-北极/_PNG/01/layers/
-  l1-background.png         # z=0 底层
-  l2-mountains01.png        # z=1
-  ...
-  l10-block.png             # z=9 顶层
-```
-
-**类型 B — 平铺编号** (沙漠/石头/西部)
-```
-沙漠/_PNG/1/
-  background.png            # z=0 底层
-  1.png                     # z=1
-  ...
-  6.png                     # z=6 顶层
-```
-
-命名规范不统一：`_PNG` vs `PNG`、`_AI` vs `AI`。`BackgroundAssembler._find_dir()` 自动探测。
-
-## 核心算法
-
-极简 —— 从底到顶 paste 图层：
-
-```python
-def composite(self, variant_name, size=None):
-    canvas = Image.new("RGBA", size or (1920, 1080), (0,0,0,0))
-    for layer in sorted_layers:        # z-order 升序
-        img = Image.open(layer.path).convert("RGBA")
-        canvas.paste(img, (0,0), img)  # 所有图层左上角对齐
-    return canvas, layer_meta
-```
-
-## 图层排序
-
-`_sort_key_natural()`: 从文件名提取首个数字 → `l1 < l2 < l10` (非字符串序)。
-
-## 视差比
-
-```
-parallax_ratio = z / (total - 1)    # z=0→0.0, z=max→1.0
-```
-
-| ratio | 含义 | LVGL |
-|-------|------|------|
-| 0.0 | 不动 (远景天空) | camera_x * 0 |
-| 0.5 | 半速 (中景山) | camera_x * 0.5 |
-| 1.0 | 全速跟镜头 (前景遮挡) | camera_x * 1.0 |
-
-## 输出 JSON (背景)
-
-```json
-{
-  "material": "北极",
-  "variant": "01",
-  "canvas": {"w": 410, "h": 502},
-  "source_size": {"w": 1920, "h": 1080},
-  "layer_count": 10,
-  "layers": [{
-    "name": "l1-background",
-    "z_order": 0,
-    "parallax_ratio": 0.0,
-    "w": 1920, "h": 1080,
-    "x": 0, "y": 0
-  }]
-}
-```
-
-所有图层左上角对齐 (x=0, y=0)，缩放时保持比例居中。
-
-
-# 三、LVGL Meta 导出 (gen_lvgl_meta.py)
-
-## 设计动机
-
-流水线是唯一生产者，LVGL 是纯粹消费者。Kaifu 的 C 代码不应重新解析 JSON、不应硬编码部件坐标。因此流水线侧多跑一步 codegen：读 15 份 `Cxx_default_positions.json` → 产出 `cat_parts_meta.{h,c}`，LVGL 工程直接 `#include`。
-
-```
-JSON (真值源)          gen_lvgl_meta.py         LVGL 工程
-─────────────          ────────────────         ─────────
-C01_default_positions.json ─┐
-C02_default_positions.json  │  解析 → C 结构     cat_parts_meta.h
-   ...                       ├────────────────→  cat_parts_meta.c
-C15_default_positions.json ─┘                    (CMake GLOB 自动收纳)
-```
-
-## 输入
-
-`output/小猫/json/410_502/Cxx_default_positions.json` × 15
-
-## 输出
-
-`output/小猫/lvgl_export/meta/cat_parts_meta.{h,c}`
-
-## 产出物结构
-
+**清理后的 part_meta_t 结构(目标态)**:
 ```c
-// cat_parts_meta.h
-
 typedef struct {
-    const char *name;            // "Eye1" / "Hand_F" / "Tails"
-    int16_t  x, y, w, h;         // 410×502 画布坐标
-    int16_t  pivot_x, pivot_y;   // 旋转轴心 (部件局部)
-    int16_t  rotation_01;        // 0.1° 单位 (JSON rotation × 10 取整)
-    uint8_t  z_order;            // Spine slot 顺序
-    const lv_image_dsc_t *img;   // &cat_Cxx_<part> (编译期绑定)
-    part_anim_type_t anim_type;  // PART_ANIM_NONE / SPIN / WAG / BOUNCE
+    const char *name;
+    int16_t  x, y, w, h;
+    int16_t  pivot_x, pivot_y;
+    int16_t  rotation_01;
+    const lv_image_dsc_t *img;
+    /* anim_type 已移除 — 应用层查 animation_config.ini */
 } part_meta_t;
-
-// 查表函数
-const lv_image_dsc_t *cat_full_find(const char *char_id);
-const part_meta_t    *cat_parts_find(const char *char_id, const char *part_name);
 ```
 
-## 字段映射
-
-| JSON 字段 | part_meta_t | 转换 |
-|-----------|-------------|------|
-| `name` | `name` | 原样字符串 |
-| `x, y, w, h` | 同名 | int16_t |
-| `pivot_x, pivot_y` | 同名 | int16_t |
-| `rotation` (float, 度) | `rotation_01` | `round(rotation × 10)`, int16_t |
-| `z_order` | 同名 | uint8_t |
-| `file` (`"C01/Hand_F.png"`) | `img` | `&cat_C01_Hand_F` |
-| `click_anim` | `anim_type` | `"wag"→PART_ANIM_WAG`, `"bounce"→PART_ANIM_BOUNCE`, `"spin"→PART_ANIM_SPIN`, null→`PART_ANIM_NONE` |
-
-## 关键决策
-
-- **包含全部部件** (不只是 `click_anim != null` 的)，给未来扩展留余地
-- **不塞占位项** — 某角色 JSON 没有 Hat (如 C04)，`cat_parts_find("C04", "Hat")` 返回 NULL
-- **Img 指针编译期绑定** — 变量名 `cat_<char>_<part_name>` 与 LVGL 现有 131 个资产 C 数组一致
-- **LV_IMAGE_DECLARE 列全** — 146 个 (15 整图 + 131 部件)，`cat_assets.h` 将被 `cat_parts_meta.h` 取代
-
-## 一键构建
-
-```bash
-bash build_assets.sh
+**清理后的 JSON 部件结构(目标态)**:
+```json
+{
+  "name": "Hand_B",
+  "file": "C01/Hand_B.png",
+  "x": 225, "y": 284, "w": 40, "h": 39,
+  "pivot_x": 20, "pivot_y": 19,
+  "rotation": -16.7,
+  "z_order": 2,
+  "category": "core"
+}
 ```
+(删除 `clickable` / `click_anim` 两字段)
 
-1. 调 `python3 tools/gen_lvgl_meta.py` 生成 meta 文件
-2. `cp` → LVGL 工程 `src/cartoon/assets/`
+---
 
-LVGL 工程 CMake 已 `file(GLOB ... cat_*.c)`，新文件自动收纳。LVGL 侧零文件修改。
+## 5. 资源齐备性自检(build_assets.sh 后必过)
 
-## 命名规则 (三处严格一致)
+| 校验项 | 命令 | 期望 |
+|--------|------|------|
+| 角色 meta 部件数 | `grep LV_IMAGE_DECLARE output/{M}/lvgl_export/meta/cat_parts_meta.h \| wc -l` | 等于 dsc 文件数 |
+| 角色 dsc 格式 | `grep -L 'LV_COLOR_FORMAT_ARGB8888' output/{M}/lvgl_export/dsc/*.c` | 空 |
+| 角色 pngseq 格式 | `grep -L 'LV_COLOR_FORMAT_RGB565A8' output/{M}/lvgl_export/pngseq/*.c` | 空 |
+| 背景 bg dsc 格式 | `grep -L 'LV_COLOR_FORMAT_RGB565' output/{B}/lvgl_export/bg/*.c` | 空 |
+| 背景 meta 图层数 | `grep -c 'bg_layer_meta_t' output/{B}/lvgl_export/meta/bg_meta.c` | 等于 bg dsc 文件数 |
+| C01 Hand_B 尺寸 | dsc 头 `.w/.h` vs JSON | 40/39 一致 |
+| INI vs 资源一致 | `python3 tools/validate_animation_config.py` | 退出码 0 |
+| INI 同步 | `diff config/ lv_port_pc_vscode/src/cartoon/config/` | 仅扩展名/路径差异 |
 
-| 项 | 模板 | 示例 |
+---
+
+## 6. 落地分期(优先级)
+
+| 期 | 范围 | 状态 |
 |----|------|------|
-| 角色 ID | `Cxx` | `C01` |
-| 整图 C 变量 | `cat_full_<char>` | `cat_full_C01` |
-| 部件 C 变量 | `cat_<char>_<part_name>` | `cat_C01_Hand_F` |
-| 部件数组 | `cat_parts_<char>[]` | `cat_parts_C01[]` |
-| 数组计数 | `cat_parts_<char>_count` | `cat_parts_C01_count` |
-| 部件名空格处理 | 空格 → 下划线 | `"Eye 1"` → `Eye_1` |
+| **P0(本任务)** | 小猫: dsc 入流水线 + 越界清理 + INI 迁到流水线 + 多素材路径参数化 | ⏳ 待 sheng 批准后让 Sonnet 执行 |
+| P1 | 其余 5 角色包(小熊/企鹅/小兔/小鸡/熊猫): 复用 P0 的参数化工具 | 后续 |
+| P2 | 9 背景包烘焙: gen_bg_assets.sh + gen_bg_meta.py + bg INI 契约 | 后续 |
+| P3 | LVGL 端 bg_driver.c 接入 bg_meta + INI 视差/摆动 | 后续(kaifu) |
 
+**P0 强制要求**: 所有工具必须**多素材参数化**,不允许把 "小猫" 字符串硬编码,确保 P1/P2 直接复用。
 
-# 四、三条流水线对比
+---
 
-| | 角色 (SpineAssembler) | 背景 (BackgroundAssembler) | LVGL Meta (gen_lvgl_meta) |
-|---|---|---|---|
-| 输入 | `Characters.json` + `Spine/` 分部件 PNG | `layers/` 或平铺 PNG | 角色 JSON × 15 |
-| 核心算法 | 骨骼矩阵链 + 附件定位 + Y轴翻转 | 图层叠加 (左上角对齐) | JSON → C struct 字段映射 |
-| 部件/图层数 | 8~10 per 角色 | 3~10 per 变体 | 全部 parts, 不筛选 |
-| 变体数 | 15 角色 × 配饰组合 | 4 场景 | 15 角色 |
-| 坐标 | 每部件独立 (x, y, pivot, rotation) | 全图层同原点 (x=0, y=0) | 从 JSON 直接搬运, 不重新计算 |
-| 动画 | 部件独立旋转/平移/缩放 | 整层水平视差滚动 | part_meta_t 提供 anim_type, LVGL 端执行 |
-| CLI | `assemble_cli.py --char C01` | `assemble_bg.py --material 北极` | `python3 tools/gen_lvgl_meta.py` |
-| 产物 | 合成 PNG + 坐标 JSON | 合成 PNG + 图层 JSON | `cat_parts_meta.{h,c}` |
+## 7. 不在本流水线范围(明确排除)
 
+- LVGL 工程内 C 代码改动(channel_animal.c / scene_forest.c / bg_driver.c 是 kaifu 的事)
+- LVGL 工程的 `animation_config.ini` 手动编辑 — 改成 build 产物
+- preview_anim.py / verify_assembler.py 为开发期工具,不烘焙到 LVGL
 
-# 五、踩坑记录
-
-1. **Skin attachment key 陷阱** — Skin dict key 全以 `C01/` 为前缀，`_resolve_attachments` 替换为 `C02/Body` 后查不到。修复: 精确匹配 → `C01/partname` → 裸名 fallback。
-
-2. **Spine Y 轴翻转** — `canvas_y = (skeleton.y + skeleton.height) - world_y`，漏掉则上下颠倒。
-
-3. **PIL rotate expand** — `expand=True` 后图片变大，paste 位置需相对新尺寸重算。
-
-4. **图层字符串排序** — `l1 < l10 < l2` (ASCII序) 错误。修复: `_sort_key_natural()` 提取数字后按数值排序。
