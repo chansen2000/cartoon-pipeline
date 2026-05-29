@@ -72,7 +72,7 @@ for action_pair in "${ACTIONS[@]}"; do
         out_name="pngseq_C${CHAR_ID}_${lower}_${frame_num}"
 
         # Resize 788×504 → 410×502, then convert to RGB565A8 C array
-        magick "$src_png" -resize 410x502 /tmp/_pngseq_resized.png
+        magick "$src_png" -resize 410x502! /tmp/_pngseq_resized.png
         npx lv_img_conv \
             -f \
             -i "$out_name" \
