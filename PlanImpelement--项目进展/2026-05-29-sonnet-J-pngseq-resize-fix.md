@@ -28,5 +28,5 @@ Throwing: 1 种尺寸
 - §3.4: sheng 真机 — 待通知
 
 ## git
-- pipeline commit: ___
-- lvgl commit: ___
+- pipeline commit: `9a31a91` pushed to origin/main
+- lvgl commit: `4ba5085` pushed to origin/master
