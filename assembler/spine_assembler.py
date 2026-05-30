@@ -348,6 +348,17 @@ class SpineAssembler:
             })
         return result
 
+    def get_canvas_anchor(self, positions):
+        """返回角色身体中心在目标画布上的 (x, y), 即 anchor。
+
+        anchor = Body 部件的几何中心 (Body 是所有 15 角色的共同核心部件)。
+        跟 LVGL 端 spawn_x/y 严格对应, 15 角色完全一致 (同一骨架)。
+        """
+        body = next((p for p in positions if p["name"] == "Body"), None)
+        if body is None:
+            raise RuntimeError("Body part not found in positions — cannot compute anchor")
+        return body["x"] + body["w"] // 2, body["y"] + body["h"] // 2
+
     def scale_to_p4(self, image, target_w=None, target_h=None):
         """将 788×504 画布缩放到 P4 屏幕"""
         tw, th = target_w or config.P4_W, target_h or config.P4_H

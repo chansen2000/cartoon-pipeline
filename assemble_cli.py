@@ -89,6 +89,7 @@ def main():
 
         if args.export_lvgl:
             lvgl = a.export_positions(positions, tw, th)
+            anchor_x, anchor_y = a.get_canvas_anchor(lvgl)
             json_path = os.path.join(json_dir, f"{char}{suffix}_positions.json")
             with open(json_path, "w") as f:
                 json.dump({
@@ -97,6 +98,7 @@ def main():
                                "glasses": accessories["glasses"],
                                "cloth": accessories["cloth"]},
                     "canvas": {"w": tw, "h": th},
+                    "anchor": {"x": anchor_x, "y": anchor_y},
                     "parts": lvgl
                 }, f, indent=2, ensure_ascii=False)
             print(f"  → {json_path}")
